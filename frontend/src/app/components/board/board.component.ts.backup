@@ -1,0 +1,1054 @@
+import { Component, computed, inject, signal, effect, OnDestroy } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
+import { TaskService, TarefaDto } from '../../services/task.service';
+import { BoardService, BoardDto, BoardColumnDto } from '../../services/board.service';
+import { BoardStateService } from '../../services/board-state.service';
+import { FilterService } from '../../services/filter.service';
+import { AuthService } from '../../services/auth.service';
+import { HttpClient } from '@angular/common/http';
+import { NotaTarefaService, NotaTarefaDto, CriarNotaRequest } from '../../services/nota-tarefa.service';
+// Removido CDK Drag Drop para implementação nativa
+import { MatCardModule } from '@angular/material/card';
+import { MatButtonModule } from '@angular/material/button';
+import { Router } from '@angular/router';
+import { MatDialog, MatDialogModule } from '@angular/material/dialog';
+import { TaskEditDialogComponent } from '../task-edit-dialog/task-edit-dialog.component';
+import { TaskSimpleDialogComponent } from '../task-simple-dialog/task-simple-dialog.component';
+import { CreateBoardDialogComponent } from '../create-board-dialog/create-board-dialog.component';
+import { TaskCreateDialogComponent } from '../task-create-dialog/task-create-dialog.component';
+import { TaskRealtimeService } from '../../services/task-realtime.service';
+import { TaskNotepadComponent } from '../task-notepad/task-notepad.component';
+
+interface ColumnState { id: number; titulo: string; ordem: number; }
+
+@Component({
+  selector: 'app-board',
+  standalone: true,
+  imports: [CommonModule, FormsModule, MatCardModule, MatButtonModule, MatDialogModule, TaskNotepadComponent],
+  templateUrl: './board.component.html',
+  styles: [`
+    .drop-zone {
+      transition: all 0.2s ease;
+    }
+    
+    .drop-zone.drag-over {
+      background: rgba(59, 130, 246, 0.1);
+      border: 2px dashed #3b82f6;
+      border-radius: 12px;
+      transform: scale(1.02);
+    }
+    
+    .task-card {
+      cursor: pointer;
+      transition: all 0.2s ease;
+      max-height: 300px;
+      overflow: hidden;
+      background: var(--surface) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: 0.75rem;
+      margin-bottom: 0.75rem;
+      box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+      user-select: none;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+    }
+    
+    .task-card:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px 0 rgba(0, 0, 0, 0.15);
+    }
+    
+    .task-card.dragging {
+      transform: scale(1.05) rotate(3deg);
+      box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+      z-index: 1000;
+      position: fixed;
+      pointer-events: none;
+    }
+    
+    .drag-handle {
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+    
+    .task-card:hover .drag-handle {
+      opacity: 1;
+    }
+    
+    .column {
+      min-height: 100px;
+    }
+  `]
+})
+export class BoardComponent implements OnDestroy {
+  private taskService = inject(TaskService);
+  private boardService = inject(BoardService);
+  private boardState = inject(BoardStateService);
+  private filters = inject(FilterService);
+  private authService = inject(AuthService);
+  private http = inject(HttpClient);
+  private notaTarefaService = inject(NotaTarefaService);
+  private router = inject(Router);
+  private dialog = inject(MatDialog);
+  private realtime = inject(TaskRealtimeService);
+
+  loading = signal(false);
+  error = signal<string | null>(null);
+  tasks = signal<TarefaDto[]>([]);
+  boards = this.boardState.boards;
+  currentBoardId = this.boardState.currentBoardId;
+  columns = signal<ColumnState[]>([]);
+  editingColumnId = signal<number | null>(null);
+  editingTaskId = signal<number | null>(null);
+  tempEditText = signal<string>('');
+  showNewBoardForm = signal(false); // descontinuado: mantido p/ backward; agora usamos dialog
+  newBoardName = signal('');
+  showNewColumnForm = signal(false);
+  newColumnTitle = signal('');
+  
+  // Notepad flutuante
+  activeNotepad = signal<{task: TarefaDto, position: {x: number, y: number}} | null>(null);
+  
+  currentBoardName = computed(() => {
+    const boardId = this.currentBoardId();
+    return this.boards().find(b => b.id === boardId)?.nome || 'Board';
+  });
+
+  tasksByColumn = computed(() => {
+    const map: Record<number, TarefaDto[]> = {};
+    this.columns().forEach(c => map[c.id] = []);
+    const term = this.filters.search().trim().toLowerCase();
+    
+    console.log('🔍 [TASKS DEBUG] tasksByColumn - colunas:', this.columns().length, 'tarefas:', this.tasks().length);
+    
+    for (const t of this.tasks()) {
+      if (term && !(`${t.titulo} ${t.descricao || ''}`.toLowerCase().includes(term))) continue;
+      const sf = this.filters.status();
+      if (sf === 'PENDING' && t.status === 'CONCLUIDA') continue;
+      if (sf === 'DONE' && t.status !== 'CONCLUIDA') continue;
+      
+      // Usa column_id como fonte principal
+      const colId = t.column_id || t.column?.id;
+      console.log('🔍 [TASKS DEBUG] Tarefa:', t.titulo, 'column_id:', t.column_id, 'column.id:', t.column?.id, 'usando colId:', colId);
+      if (colId && map[colId]) {
+        map[colId].push(t);
+        console.log('🔍 [TASKS DEBUG] Tarefa adicionada à coluna', colId);
+      } else {
+        console.log('🔍 [TASKS DEBUG] Tarefa NÃO adicionada - colId:', colId, 'map[colId] exists:', !!map[colId]);
+      }
+    }
+    console.log('🔍 [TASKS DEBUG] mapa final:', map);
+    return map;
+  });
+
+  total = computed(() => this.tasks().length);
+  done = computed(() => this.tasks().filter(t => t.status === 'CONCLUIDA').length); // provisório até remover status
+
+  constructor() { 
+    this.init(); 
+    
+    // Reage às mudanças no estado de autenticação
+    effect(() => {
+      const isAuth = this.authService.authChanged();
+      if (isAuth) {
+        console.log('🔐 BoardComponent: Usuário autenticado, carregando boards...');
+        this.boardState.loadBoards(true);
+      }
+    });
+  }
+
+  private init() {
+    // Verifica autenticação na inicialização
+    if (this.authService.isAuthenticated()) {
+      console.log('🔐 BoardComponent.init(): Usuário autenticado, carregando boards...');
+      this.boardState.loadBoards(true);
+    } else {
+      console.log('❌ BoardComponent.init(): Usuário não autenticado');
+    }
+    
+    this.realtime.connect();
+    if (typeof window !== 'undefined') {
+      window.addEventListener('open-new-column-form', () => {
+        this.showNewColumnForm.set(true);
+        setTimeout(()=>{
+          const el = document.querySelector('input[name="columnTitle"]') as HTMLInputElement | null;
+          el?.focus();
+        },50);
+      });
+    }
+    // Hook realtime handler
+    (this.realtime as any).handle = (evt: any) => {
+      const type = evt.type;
+      if (type === 'TASK_CREATED') {
+        const t = evt.task as any; // assume board set server side
+        if (this.currentBoardId() && t.board && t.board.id === this.currentBoardId()) {
+          this.tasks.set([...this.tasks(), t]);
+        }
+      } else if (type === 'TASK_UPDATED') {
+        const t = evt.task as any;
+        this.tasks.set(this.tasks().map(x => x.id === t.id ? t : x));
+      } else if (type === 'TASK_DELETED') {
+        this.tasks.set(this.tasks().filter(t => t.id !== evt.id));
+      } else if (type === 'TASKS_REORDERED') {
+        const current = this.currentBoardId();
+        if (evt.boardId && current === evt.boardId) {
+          if (current != null) this.loadTasks(current);
+        } else if (evt.boardId === -1 && current != null) {
+          // fallback genérico
+          this.loadTasks(current);
+        }
+      }
+    };
+
+    effect(() => {
+      const id = this.currentBoardId();
+      console.log('🔍 [BOARD DEBUG] effect currentBoardId mudou para:', id);
+      if (id) {
+        this.loadColumns(id);
+        this.loadTasks(id);
+      } else {
+        this.columns.set([]); this.tasks.set([]);
+      }
+    });
+  }
+
+  selectBoard(id: number) {
+    if (this.currentBoardId() === id) return;
+    this.boardState.select(id);
+    this.loadColumns(id);
+    this.loadTasks(id);
+  }
+
+  openCreateBoardDialog() {
+    const ref = this.dialog.open(CreateBoardDialogComponent, {
+      panelClass: 'task-detail-dialog',
+      disableClose: true
+    });
+    ref.afterClosed().subscribe(result => {
+      if (result?.nome) {
+        this.boardService.createBoard(result.nome, result.icon).subscribe({
+          next: b => { this.boardState.add(b, () => this.boardState.select(b.id)); },
+          error: err => console.error('Erro criar board', err)
+        });
+      }
+    });
+  }
+
+  // Compatibilidade: ainda existe botão em empty state chamando createBoard()
+  createBoard() { this.openCreateBoardDialog(); }
+
+  renameCurrentBoard() {
+    const id = this.currentBoardId();
+    if (!id) return;
+    const atual = this.boards().find(b => b.id === id)?.nome || '';
+    const nome = prompt('Renomear board:', atual);
+    if (!nome) return;
+    this.boardService.renameBoard(id, nome).subscribe({
+      next: b => this.boardState.update(b),
+      error: err => console.error('Erro renomear', err)
+    });
+  }
+
+  loadColumns(boardId: number) {
+    this.boardService.listColumns(boardId).subscribe({
+      next: cols => this.columns.set(cols.map(c => ({ id: c.id, titulo: c.titulo, ordem: c.ordem }))),
+      error: err => console.error('Erro colunas', err)
+    });
+  }
+
+  addColumn() {
+    const boardId = this.currentBoardId();
+    if (!boardId) return;
+    const titulo = this.newColumnTitle().trim();
+    if (!titulo) { return; }
+    this.boardService.createColumn(boardId, titulo).subscribe({
+      next: c => { this.columns.set([...this.columns(), { id: c.id, titulo: c.titulo, ordem: c.ordem }].sort((a,b)=>a.ordem-b.ordem)); this.newColumnTitle.set(''); this.showNewColumnForm.set(false); },
+      error: err => console.error('Erro criar coluna', err)
+    });
+  }
+
+  deleteCurrentBoard() {
+    const id = this.currentBoardId();
+    if (!id) return;
+    if (!confirm('Excluir este board e suas colunas?')) return;
+    this.boardService.deleteBoard(id).subscribe({
+      next: () => { this.boardState.remove(id); this.columns.set([]); this.tasks.set([]); },
+      error: err => console.error('Erro excluir board', err)
+    });
+  }
+
+  deleteColumn(col: ColumnState) {
+    if (!confirm('Excluir coluna e tarefas associadas?')) return;
+    this.boardService.deleteColumn(col.id).subscribe({
+      next: () => { this.columns.set(this.columns().filter(c => c.id!==col.id)); this.tasks.set(this.tasks().filter(t => t.column?.id !== col.id)); },
+      error: err => console.error('Erro excluir coluna', err)
+    });
+  }
+
+  loadTasks(boardId: number) {
+    console.log('🔍 [TASKS DEBUG] Carregando tarefas para board:', boardId);
+    this.loading.set(true);
+    this.taskService.listByBoard(boardId).subscribe({
+      next: list => { 
+        console.log('🔍 [TASKS DEBUG] Tarefas recebidas:', list.length, list);
+        this.tasks.set(list); 
+        this.loading.set(false); 
+      },
+      error: err => { 
+        console.error('🔍 [TASKS DEBUG] Erro ao carregar tarefas:', err);
+        this.error.set('Erro ao carregar tarefas'); 
+        this.loading.set(false); 
+      }
+    });
+  }
+
+  // Sistema de drag and drop melhorado
+  isDragging = signal(false);
+  draggedTask = signal<TarefaDto | null>(null);
+  dragPreview = signal<HTMLElement | null>(null);
+  dragStartPosition = signal<{x: number, y: number} | null>(null);
+  dropZoneColumn = signal<number | null>(null);
+  isDragReady = signal(false);
+  dragStartTime = signal(0);
+  
+  // Novos métodos de drag and drop
+  onTaskClick(task: TarefaDto, event: Event) {
+    // Só abre detalhes se não for drag nem clique em botões
+    if (!this.isDragReady() && !(event.target as HTMLElement).closest('button')) {
+      this.openDetails(task, event as MouseEvent);
+    }
+  }
+
+  onTaskMouseDown(event: MouseEvent, task: TarefaDto) {
+    // Só inicia drag se clicar no drag handle
+    if (!(event.target as HTMLElement).closest('.drag-handle')) {
+      return;
+    }
+
+    if (event.button !== 0) return; // Apenas botão esquerdo
+    
+    event.preventDefault();
+    event.stopPropagation();
+    
+    this.dragStartTime.set(Date.now());
+    this.dragStartPosition.set({ x: event.clientX, y: event.clientY });
+    this.draggedTask.set(task);
+    this.isDragReady.set(true);
+    
+    // Adiciona listeners globais para detectar movimento
+    document.addEventListener('mousemove', this.onDragMouseMove.bind(this));
+    document.addEventListener('mouseup', this.onDragMouseUp.bind(this));
+    document.body.style.userSelect = 'none';
+  }
+
+  private onDragMouseMove(event: MouseEvent) {
+    if (!this.isDragReady() && !this.isDragging()) return;
+    
+    const startPos = this.dragStartPosition();
+    if (!startPos) return;
+    
+    const distance = Math.sqrt(
+      Math.pow(event.clientX - startPos.x, 2) + 
+      Math.pow(event.clientY - startPos.y, 2)
+    );
+    
+    // Só inicia drag se mover pelo menos 5px
+    if (distance > 5 && this.isDragReady()) {
+      this.startDragging(event);
+    }
+    
+    if (this.isDragging()) {
+      this.updateDragPreview(event);
+      this.updateDropZone(event);
+    }
+  }
+
+  private startDragging(event: MouseEvent) {
+    this.isDragging.set(true);
+    this.isDragReady.set(false);
+    
+    const task = this.draggedTask();
+    if (!task) return;
+    
+    // Cria preview
+    this.createDragPreview(event, task);
+    document.body.style.cursor = 'grabbing';
+  }
+
+  private createDragPreview(event: MouseEvent, task: TarefaDto) {
+    const preview = document.createElement('div');
+    preview.innerHTML = `
+      <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl border border-gray-200 dark:border-gray-700 p-3 max-w-xs pointer-events-none">
+        <div class="font-medium text-sm">${task.titulo}</div>
+        <div class="text-xs text-gray-500 mt-1">${task.column?.titulo || ''}</div>
+      </div>
+    `;
+    preview.style.position = 'fixed';
+    preview.style.top = `${event.clientY - 20}px`;
+    preview.style.left = `${event.clientX - 50}px`;
+    preview.style.zIndex = '1000';
+    preview.style.pointerEvents = 'none';
+    preview.style.transform = 'rotate(5deg) scale(1.05)';
+    preview.style.transition = 'transform 0.2s ease';
+    
+    document.body.appendChild(preview);
+    this.dragPreview.set(preview);
+  }
+
+  private updateDragPreview(event: MouseEvent) {
+    const preview = this.dragPreview();
+    if (!preview) return;
+    
+    preview.style.left = `${event.clientX - 50}px`;
+    preview.style.top = `${event.clientY - 20}px`;
+  }
+
+  private updateDropZone(event: MouseEvent) {
+    // Remove classes anteriores
+    document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    
+    // Detecta zona de drop
+    const elementUnderMouse = document.elementFromPoint(event.clientX, event.clientY);
+    const dropZone = elementUnderMouse?.closest('[data-column-id]') as HTMLElement;
+    
+    if (dropZone) {
+      const columnId = parseInt(dropZone.dataset['columnId'] || '0');
+      const draggedTask = this.draggedTask();
+      
+      if (draggedTask && columnId !== draggedTask.column?.id) {
+        this.dropZoneColumn.set(columnId);
+        dropZone.classList.add('drag-over');
+        document.body.style.cursor = 'grabbing';
+      } else {
+        this.dropZoneColumn.set(null);
+        document.body.style.cursor = 'not-allowed';
+      }
+    } else {
+      this.dropZoneColumn.set(null);
+      document.body.style.cursor = 'grabbing';
+    }
+  }
+
+  private onDragMouseUp(event: MouseEvent) {
+    // Limpa listeners
+    document.removeEventListener('mousemove', this.onDragMouseMove.bind(this));
+    document.removeEventListener('mouseup', this.onDragMouseUp.bind(this));
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
+    
+    if (this.isDragging()) {
+      this.completeDrag();
+    } else if (this.isDragReady()) {
+      // Era um clique simples, não drag
+      this.isDragReady.set(false);
+    }
+    
+    this.resetDragState();
+  }
+
+  private completeDrag() {
+    const preview = this.dragPreview();
+    const dropColumnId = this.dropZoneColumn();
+    const draggedTask = this.draggedTask();
+    
+    if (preview) {
+      if (dropColumnId && draggedTask && dropColumnId !== draggedTask.column?.id) {
+        // Animação de sucesso
+        preview.style.transform = 'scale(0.8) rotate(0deg)';
+        preview.style.opacity = '0.8';
+        this.moveTaskToColumn(draggedTask, dropColumnId);
+      } else {
+        // Animação de falha
+        preview.style.transform = 'scale(0.5) rotate(-10deg)';
+        preview.style.opacity = '0';
+      }
+      
+      setTimeout(() => {
+        preview.remove();
+        this.dragPreview.set(null);
+      }, 200);
+    }
+    
+    // Remove classes de drop zone
+    document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+  }
+
+  private resetDragState() {
+    this.isDragging.set(false);
+    this.isDragReady.set(false);
+    this.draggedTask.set(null);
+    this.dropZoneColumn.set(null);
+    this.dragStartPosition.set(null);
+    this.dragStartTime.set(0);
+  }
+
+  private moveTaskToColumn(task: TarefaDto, newColumnId: number) {
+    // Verifica se a tarefa tem ID válido
+    if (!task.id) {
+      console.error('Tarefa sem ID válido');
+      return;
+    }
+    
+    const previousColumnId = task.column?.id;
+    const targetColumn = this.columns().find(c => c.id === newColumnId);
+    
+    if (!targetColumn) {
+      console.error('Coluna de destino não encontrada');
+      return;
+    }
+    
+    // Atualização otimista com informações corretas da coluna
+    const currentTasks = this.tasks();
+    const updatedTasks = currentTasks.map(t => 
+      t.id === task.id ? { 
+        ...t, 
+        column: { 
+          id: newColumnId, 
+          titulo: targetColumn.titulo, 
+          ordem: targetColumn.ordem 
+        } 
+      } : t
+    );
+    this.tasks.set(updatedTasks);
+    
+    // Atualiza no backend
+    this.taskService.moveToColumn(task.id, newColumnId).subscribe({
+      next: (updated: any) => {
+        // Atualiza com dados do servidor (garantindo que a coluna está correta)
+        const finalTasks = this.tasks().map(t => 
+          t.id === task.id ? { 
+            ...updated, 
+            column: updated.column || { 
+              id: newColumnId, 
+              titulo: targetColumn.titulo, 
+              ordem: targetColumn.ordem 
+            } 
+          } : t
+        );
+        this.tasks.set(finalTasks);
+        this.recalculatePositionsColumns();
+        this.persistReorderColumns();
+        
+        // Notifica mudança
+        if (typeof previousColumnId === 'number' && typeof task.id === 'number') {
+          this.realtime.notifyTaskMoved(task.id, previousColumnId, newColumnId);
+        }
+      },
+      error: (err) => {
+        console.error('Erro ao mover tarefa:', err);
+        // Reverte mudança
+        const boardId = this.currentBoardId();
+        if (boardId) this.loadTasks(boardId);
+        this.error.set('Erro ao mover tarefa. Tente novamente.');
+      }
+    });
+  }
+
+  private recalculatePositions() {
+    const all = this.tasks();
+    const byStatus: Record<string, TarefaDto[]> = {};
+    for (const t of all) {
+      const k = t.status || 'PENDENTE';
+      (byStatus[k] ||= []).push(t);
+    }
+    Object.values(byStatus).forEach(list => {
+      // manter ordem atual do array e apenas reatribuir posições sequenciais
+      list.forEach((t,i) => t.position = i+1);
+    });
+  }
+
+  private recalculatePositionsColumns() {
+    const byColumn: Record<number, TarefaDto[]> = {} as any;
+    for (const t of this.tasks()) {
+      const cid = t.column?.id; if (!cid) continue;
+      (byColumn[cid] ||= []).push(t);
+    }
+    Object.values(byColumn).forEach(list => list.forEach((t,i) => t.position = i+1));
+  }
+
+  private persistReorder() {
+    const bid = this.currentBoardId();
+    const payload = this.tasks().map(t => ({ id: t.id, posicao: t.position, status: t.status, boardId: bid }));
+    this.taskService.reorderTasks(payload).subscribe({
+      error: err => { console.error('Falha ao reordenar', err); const b = this.currentBoardId(); if (b) this.loadTasks(b); }
+    });
+  }
+
+  private persistReorderColumns() {
+    const bid = this.currentBoardId();
+    const payload = this.tasks().map(t => ({ id: t.id, posicao: t.position, status: t.status, columnId: t.column?.id, boardId: bid }));
+    this.taskService.reorderTasks(payload).subscribe({
+      error: err => { console.error('Falha ao reordenar colunas', err); const b = this.currentBoardId(); if (b) this.loadTasks(b); }
+    });
+  }
+
+  onSelectBoard(event: Event) {
+    const sel = event.target as HTMLSelectElement | null;
+    if (sel && sel.value) this.selectBoard(+sel.value);
+  }
+
+  onEditInput(event: Event) {
+    const inp = event.target as HTMLInputElement | null;
+    if (inp) this.tempEditText.set(inp.value);
+  }
+
+  formatDue(t: TarefaDto) {
+    if (!t.dueDate) return '';
+    try { return this.relativeTime(new Date(t.dueDate)); } catch { return t.dueDate; }
+  }
+
+  private relativeTime(date: Date): string {
+    const now = new Date();
+    const diffMs = date.getTime() - now.getTime();
+    const abs = Math.abs(diffMs);
+    const minutes = Math.round(abs / 60000);
+    if (minutes < 1) return diffMs < 0 ? 'agora (atrasada)' : 'agora';
+    if (minutes < 60) return diffMs < 0 ? `${minutes}m atrasada` : `em ${minutes}m`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return diffMs < 0 ? `${hours}h atrasada` : `em ${hours}h`;
+    const days = Math.round(hours / 24);
+    return diffMs < 0 ? `${days}d atrasada` : `em ${days}d`;
+  }
+
+  isOverdue(t: TarefaDto): boolean {
+    if (!t.dueDate) return false;
+    const d = new Date(t.dueDate);
+    return d.getTime() < Date.now();
+  }
+
+  isDueSoon(t: TarefaDto): boolean {
+    if (!t.dueDate) return false;
+    const now = Date.now();
+    const d = new Date(t.dueDate).getTime();
+    if (d < now) return false;
+    const THRESHOLD = 36 * 60 * 60 * 1000; // 36h
+    return d - now <= THRESHOLD;
+  }
+
+  /**
+   * Calcula o status do prazo baseado no tempo restante vs tempo total
+   * Retorna: 'verde' | 'amarelo' | 'vermelho' | 'vermelho-escuro' | null
+   */
+  getDeadlineStatus(t: TarefaDto): string | null {
+    if (!t.dueDate || !t.criadoEm) return null;
+    
+    const now = Date.now();
+    const deadline = new Date(t.dueDate).getTime();
+    const created = new Date(t.criadoEm).getTime();
+    
+    if (deadline <= now) {
+      return 'vermelho-escuro'; // Prazo já passou
+    }
+    
+    const totalTime = deadline - created;
+    const remainingTime = deadline - now;
+    const percentRemaining = remainingTime / totalTime;
+    
+    // Últimas 10% do tempo total (vermelho escuro)
+    if (percentRemaining <= 0.1) {
+      return 'vermelho-escuro';
+    }
+    // Últimas 25% do tempo total (vermelho)
+    else if (percentRemaining <= 0.25) {
+      return 'vermelho';
+    }
+    // 25% a 50% do tempo restante (amarelo)
+    else if (percentRemaining <= 0.5) {
+      return 'amarelo';
+    }
+    // Mais de 50% do tempo restante (verde)
+    else {
+      return 'verde';
+    }
+  }
+
+  /**
+   * Retorna a cor CSS para o status de prazo
+   */
+  getDeadlineColor(status: string | null): string {
+    switch (status) {
+      case 'verde': return '#10b981'; // green-500
+      case 'amarelo': return '#f59e0b'; // amber-500
+      case 'vermelho': return '#ef4444'; // red-500
+      case 'vermelho-escuro': return '#dc2626'; // red-600
+      default: return 'transparent';
+    }
+  }
+
+  /**
+   * Retorna a cor da borda baseada na prioridade
+   */
+  getPriorityBorderColor(prioridade?: string): string {
+    switch (prioridade?.toLowerCase()) {
+      case 'baixa': return '#10b981'; // green-500
+      case 'normal': return '#3b82f6'; // blue-500
+      case 'alta': return '#f59e0b'; // amber-500
+      case 'urgente': return '#ef4444'; // red-500
+      default: return '#6b7280'; // gray-500
+    }
+  }
+
+  quickAddInColumn(col: ColumnState) {
+    const boardId = this.currentBoardId(); if (!boardId) return;
+    console.log('🔍 [CREATE TASK DEBUG] Abrindo dialog para criar tarefa na coluna:', col.id, 'board:', boardId);
+    const ref = this.dialog.open(TaskCreateDialogComponent, { disableClose: true });
+    ref.afterClosed().subscribe(result => {
+      console.log('🔍 [CREATE TASK DEBUG] Dialog fechado com resultado:', result);
+      if (result?.titulo) {
+        const payload: any = { titulo: result.titulo, descricao: result.descricao };
+        if (result.dueDate) payload.dueDate = result.dueDate;
+        console.log('🔍 [CREATE TASK DEBUG] Criando tarefa com payload:', payload);
+        this.taskService.createInBoardColumn(boardId, col.id, payload).subscribe({
+          next: (t:any) => {
+            console.log('🔍 [CREATE TASK DEBUG] Tarefa criada:', t);
+            console.log('🔍 [CREATE TASK DEBUG] Tarefa tem column_id?', t.column_id);
+            console.log('🔍 [CREATE TASK DEBUG] Tarefa tem column?', t.column);
+            console.log('🔍 [CREATE TASK DEBUG] Tasks antes da adição:', this.tasks().length);
+            this.tasks.set([...this.tasks(), t]);
+            console.log('🔍 [CREATE TASK DEBUG] Tasks depois da adição:', this.tasks().length);
+            // Recarregar tarefas para garantir sincronização
+            setTimeout(() => {
+              console.log('🔍 [CREATE TASK DEBUG] Recarregando todas as tarefas...');
+              this.loadTasks(boardId);
+            }, 100);
+          },
+          error: err => {
+            console.error('🔍 [CREATE TASK DEBUG] Erro criar tarefa:', err);
+          }
+        });
+      }
+    });
+  }
+
+  startEditColumn(col: ColumnState) { this.editingColumnId.set(col.id); this.tempEditText.set(col.titulo); }
+  commitEditColumn(col: ColumnState) {
+    const val = this.tempEditText().trim();
+    if (!val || val === col.titulo) { this.editingColumnId.set(null); return; }
+    this.boardService.renameColumn(col.id, val).subscribe({
+      next: upd => { this.columns.set(this.columns().map(c => c.id===col.id ? { ...c, titulo: upd.titulo } : c)); this.editingColumnId.set(null); },
+      error: err => { console.error('Erro renomear coluna', err); this.editingColumnId.set(null); }
+    });
+  }
+  cancelEditColumn() { this.editingColumnId.set(null); }
+
+  startEditTask(t: TarefaDto) { this.editingTaskId.set(t.id!); this.tempEditText.set(t.titulo); }
+  commitEditTask(t: TarefaDto) {
+    const val = this.tempEditText().trim();
+    if (!val || val === t.titulo) { this.editingTaskId.set(null); return; }
+    this.taskService.update(t.id!, { ...t, titulo: val }).subscribe({
+      next: upd => { this.tasks.set(this.tasks().map(x => x.id===t.id ? { ...x, titulo: upd.titulo } : x)); this.editingTaskId.set(null); },
+      error: err => { console.error('Erro atualizar tarefa', err); this.editingTaskId.set(null); }
+    });
+  }
+  cancelEditTask() { this.editingTaskId.set(null); }
+
+  openDetails(t: TarefaDto, ev: Event) {
+    if ((ev.target as HTMLElement).closest('.drag-handle')) return; // ignora clique no handle
+    console.log('Abrindo dialog para tarefa:', t);
+    
+    const dialogRef = this.dialog.open(TaskEditDialogComponent, {
+      width: '700px',
+      maxWidth: '90vw',
+      hasBackdrop: true,
+      disableClose: false,
+      data: { task: t }
+    });
+
+    dialogRef.afterClosed().subscribe(result => {
+      console.log('Dialog fechado:', result);
+      if (result?.action === 'updated') {
+        // Atualiza a tarefa específica no estado local
+        const updatedTask = result.task;
+        this.tasks.set(this.tasks().map(t => t.id === updatedTask.id ? updatedTask : t));
+      } else if (result?.action === 'deleted') {
+        // Remove a tarefa do estado local
+        this.tasks.set(this.tasks().filter(t => t.id !== result.taskId));
+      }
+    });
+  }
+
+  openTaskNotes(t: TarefaDto, event: Event) {
+    event.stopPropagation();
+    // Abre o dialog de detalhes da tarefa que já contém o componente de notas
+    this.openDetails(t, event);
+  }
+
+  async openShareDialog() {
+    if (!this.currentBoardId()) return;
+    
+    const currentBoard = this.boards().find(b => b.id === this.currentBoardId());
+    if (!currentBoard) return;
+
+    const { BoardShareDialogComponent } = await import('../board-share-dialog/board-share-dialog.component');
+    this.dialog.open(BoardShareDialogComponent, {
+      width: '550px',
+      maxWidth: '90vw',
+      data: { board: currentBoard }
+    });
+  }
+
+  // ===== MÉTODOS PARA NOTEPAD FLUTUANTE =====
+  
+  stopPropagation(event: Event) {
+    event.stopPropagation();
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+  
+  toggleNotesPanel(task: TarefaDto, event: Event) {
+    // Múltiplas proteções contra propagação
+    this.stopPropagation(event);
+    
+    const currentNotepad = this.activeNotepad();
+    if (currentNotepad && currentNotepad.task.id === task.id) {
+      this.closeNotepad();
+    } else {
+      this.openNotepad(task, event);
+    }
+  }
+
+  private openNotepad(task: TarefaDto, event: Event) {
+    // Calcula posição ao lado do card da tarefa
+    const target = event.target as HTMLElement;
+    const taskCard = target.closest('.task-card') as HTMLElement;
+    
+    if (taskCard) {
+      const rect = taskCard.getBoundingClientRect();
+      const position = {
+        x: rect.right + 10, // 10px à direita do card
+        y: rect.top
+      };
+      
+      // Ajusta para não sair da tela
+      if (position.x + 280 > window.innerWidth) {
+        position.x = rect.left - 290; // Move para esquerda se não cabe à direita
+      }
+      
+      if (position.y + 400 > window.innerHeight) {
+        position.y = window.innerHeight - 410; // Ajusta altura se não cabe
+      }
+      
+      this.activeNotepad.set({ task, position });
+    }
+  }
+
+  closeNotepad() {
+    this.activeNotepad.set(null);
+  }
+
+  onNotepadClose() {
+    this.closeNotepad();
+  }
+
+  // Cleanup quando o componente for destruído
+  ngOnDestroy() {
+    // Remove qualquer notepad ativo
+    this.closeNotepad();
+  }
+}
+  
+  stopPropagation(event: Event) {
+    event.stopPropagation();
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+  
+  toggleNotesPanel(task: TarefaDto, event: Event) {
+    // Múltiplas proteções contra propagação
+    this.stopPropagation(event);
+    
+    if (this.notesPanelOpen() && this.selectedTaskForNotes()?.id === task.id) {
+      this.closeNotesPanel();
+    } else {
+      this.openNotesPanel(task);
+    }
+  }
+
+  private openNotesPanel(task: TarefaDto) {
+    this.selectedTaskForNotes.set(task);
+    this.notesPanelOpen.set(true);
+    if (task.id) {
+      this.loadNotesForTask(task.id);
+      this.loadBoardMembers();
+    }
+    // Reset form
+    this.newNoteContent = '';
+    this.noteVisibilityMode = 'public';
+    this.selectedMembers = [];
+    
+    // Inicia atualização em tempo real
+    this.startRealtimeUpdates();
+  }
+
+  closeNotesPanel() {
+    this.notesPanelOpen.set(false);
+    this.selectedTaskForNotes.set(null);
+    this.currentTaskNotes.set([]);
+    this.boardMembers.set([]);
+    this.selectedMembers = [];
+    
+    // Para atualização em tempo real
+    this.stopRealtimeUpdates();
+  }
+
+  private loadNotesForTask(taskId: number) {
+    // Verifica se o usuário ainda está autenticado antes de fazer a chamada
+    const token = localStorage.getItem('auth_token');
+    if (!token) {
+      console.log('Usuário não autenticado - não carregando notas');
+      this.currentTaskNotes.set([]);
+      return;
+    }
+
+    // Usa o método seguro que não causa logout automático
+    this.notaTarefaService.listarNotasSafe(taskId).subscribe({
+      next: (notes: NotaTarefaDto[]) => {
+        // Só atualiza se houve mudanças (evita flickering)
+        const currentNotes = this.currentTaskNotes();
+        if (JSON.stringify(currentNotes) !== JSON.stringify(notes)) {
+          this.currentTaskNotes.set(notes);
+        }
+      },
+      error: (error: any) => {
+        // Este erro handler não deve ser chamado agora, mas mantemos por segurança
+        console.error('Erro ao carregar notas:', error);
+        this.currentTaskNotes.set([]);
+      }
+    });
+  }
+
+  addNote() {
+    const task = this.selectedTaskForNotes();
+    if (!task || !task.id || !this.newNoteContent.trim()) return;
+    
+    // Validação para membros específicos
+    if (this.noteVisibilityMode === 'specific' && this.selectedMembers.length === 0) return;
+
+    const newNote: CriarNotaRequest = {
+      conteudo: this.newNoteContent.trim(),
+      publica: this.noteVisibilityMode === 'public',
+      destinatarioId: this.noteVisibilityMode === 'specific' && this.selectedMembers.length === 1 
+        ? this.selectedMembers[0] 
+        : undefined
+    };
+
+    this.notaTarefaService.criarNota(task.id, newNote).subscribe({
+      next: (nota: NotaTarefaDto) => {
+        // Adiciona a nova nota à lista
+        this.currentTaskNotes.set([...this.currentTaskNotes(), nota]);
+        // Limpa o formulário
+        this.newNoteContent = '';
+        this.noteVisibilityMode = 'public';
+        this.selectedMembers = [];
+      },
+      error: (error: any) => {
+        console.error('Erro ao criar nota:', error);
+      }
+    });
+  }
+
+  deleteNote(noteId: number) {
+    if (!noteId || !confirm('Tem certeza que deseja excluir esta nota?')) return;
+
+    this.notaTarefaService.deletarNota(noteId).subscribe({
+      next: () => {
+        // Remove a nota da lista
+        this.currentTaskNotes.set(this.currentTaskNotes().filter(n => n.id !== noteId));
+      },
+      error: (error: any) => {
+        console.error('Erro ao excluir nota:', error);
+      }
+    });
+  }
+
+  canDeleteNote(note: NotaTarefaDto): boolean {
+    const currentUser = this.authService.getCurrentUser();
+    return currentUser?.email === note.autor?.email;
+  }
+
+  getInitials(name: string): string {
+    return name.split(' ')
+      .map(part => part.charAt(0).toUpperCase())
+      .slice(0, 2)
+      .join('');
+  }
+
+  formatDateTime(date: string): string {
+    const d = new Date(date);
+    const now = new Date();
+    const diffInHours = Math.abs(now.getTime() - d.getTime()) / (1000 * 60 * 60);
+    
+    if (diffInHours < 24) {
+      return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    } else {
+      return d.toLocaleDateString('pt-BR', { 
+        day: '2-digit', 
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    }
+  }
+
+  trackByNota(index: number, nota: NotaTarefaDto): number {
+    return nota.id || index;
+  }
+
+  // ===== MÉTODOS PARA MEMBROS E VISIBILIDADE =====
+  
+  private loadBoardMembers() {
+    const boardId = this.currentBoardId();
+    console.log('🔍 [BOARD MEMBERS DEBUG] Carregando membros para board:', boardId);
+    if (!boardId) return;
+
+    this.boardService.getBoardMembers(boardId).subscribe({
+      next: (members) => {
+        console.log('🔍 [BOARD MEMBERS DEBUG] Membros carregados:', members);
+        this.boardMembers.set(members);
+      },
+      error: (error) => {
+        console.error('🔍 [BOARD MEMBERS DEBUG] Erro ao carregar membros:', error);
+        // Fallback: lista vazia
+        this.boardMembers.set([]);
+      }
+    });
+  }
+
+  toggleMemberSelection(memberId: number, event: any) {
+    if (event.target.checked) {
+      this.selectedMembers = [...this.selectedMembers, memberId];
+    } else {
+      this.selectedMembers = this.selectedMembers.filter(id => id !== memberId);
+    }
+  }
+
+  // ===== ATUALIZAÇÃO EM TEMPO REAL =====
+  
+  private startRealtimeUpdates() {
+    this.stopRealtimeUpdates(); // Limpa qualquer intervalo anterior
+    
+    // Atualiza as notas a cada 3 segundos
+    this.notesUpdateInterval = setInterval(() => {
+      const task = this.selectedTaskForNotes();
+      if (task && task.id && this.notesPanelOpen()) {
+        this.loadNotesForTask(task.id);
+      }
+    }, 3000);
+  }
+
+  private stopRealtimeUpdates() {
+    if (this.notesUpdateInterval) {
+      clearInterval(this.notesUpdateInterval);
+      this.notesUpdateInterval = null;
+    }
+  }
+
+  // Cleanup quando o componente for destruído
+  ngOnDestroy() {
+    this.stopRealtimeUpdates();
+  }
+}
+
+

@@ -1,0 +1,5 @@
+/* Ajustes específicos de drag & drop que Tailwind não cobre */
+.cdk-drag-preview { box-sizing:border-box; border-radius:0.5rem; background:#1e293b; box-shadow:0 10px 30px -10px rgba(0,0,0,.6); padding:0.5rem 0.5rem; opacity:.9; }
+.cdk-drag-placeholder { opacity:0; }
+.cdk-drag-animating { transition: transform .18s cubic-bezier(.2,.8,.25,1); }
+div[cdkDropList].cdk-drop-list-dragging .group:not(.cdk-drag-placeholder) { opacity:.55; }

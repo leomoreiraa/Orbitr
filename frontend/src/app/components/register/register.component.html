@@ -1,0 +1,171 @@
+<div class="min-h-screen flex items-center justify-center px-6 bg-gradient-to-br from-[var(--bg)] to-[var(--bg-soft)]">
+  <div class="w-full max-w-md">
+    <!-- Mostrar componente de verificação se necessário -->
+    @if (showVerification()) {
+      <app-email-verification 
+        [email]="verificationEmail()" 
+        [userData]="formData()">
+      </app-email-verification>
+    } @else {
+      <!-- Logo Header -->
+      <div class="text-center mb-8">
+        <div class="flex items-center justify-center gap-3 mb-4">
+          <img src="icon.png" alt="Orbitr" class="w-12 h-12 rounded-xl shadow-lg">
+          <span class="text-3xl font-bold bg-gradient-to-r from-[var(--brand)] to-[var(--accent)] bg-clip-text text-transparent">Orbitr</span>
+        </div>
+      </div>
+      
+      <!-- Register Card -->
+      <div class="bg-[var(--surface)] border border-[var(--border)] rounded-3xl shadow-2xl p-8">
+        <div class="text-center mb-8">
+          <h1 class="text-2xl font-bold text-[var(--text)] mb-2">Crie sua conta</h1>
+          <p class="text-sm text-[var(--text-soft)]">Comece a organizar suas atividades agora mesmo</p>
+        </div>
+
+        <form class="space-y-5" [formGroup]="form" (ngSubmit)="submit()" novalidate>
+          <!-- Nome Completo -->
+          <div>
+            <label for="nome" class="block text-sm font-medium text-[var(--text)] mb-2">Nome</label>
+            <input 
+              id="nome" 
+              type="text" 
+              formControlName="nome" 
+              placeholder="Seu nome completo"
+              class="w-full px-4 py-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] placeholder-[var(--text-soft)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)] focus:border-transparent transition"
+            />
+            <div *ngIf="form.get('nome')?.touched && form.get('nome')?.invalid" class="text-sm text-red-500 mt-1">
+              <span *ngIf="form.get('nome')?.hasError('required')">Nome é obrigatório</span>
+              <span *ngIf="form.get('nome')?.hasError('minlength')">Mínimo 2 caracteres</span>
+              <span *ngIf="form.get('nome')?.hasError('maxlength')">Máximo 50 caracteres</span>
+            </div>
+          </div>
+
+          <!-- Email -->
+          <div>
+            <label for="email" class="block text-sm font-medium text-[var(--text)] mb-2">Email</label>
+            <input 
+              id="email" 
+              type="email" 
+              formControlName="email" 
+              autocomplete="email" 
+              placeholder="seu@email.com"
+              class="w-full px-4 py-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] placeholder-[var(--text-soft)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)] focus:border-transparent transition"
+            />
+            <div *ngIf="form.get('email')?.touched && form.get('email')?.invalid" class="text-sm text-red-500 mt-1">
+              <span *ngIf="form.get('email')?.hasError('required')">Email é obrigatório</span>
+              <span *ngIf="form.get('email')?.hasError('email')">Formato de email inválido</span>
+            </div>
+          </div>
+
+          <!-- Nome de Usuário -->
+          <div>
+            <label for="nomeUsuario" class="block text-sm font-medium text-[var(--text)] mb-2">Nome de Usuário</label>
+            <input 
+              id="nomeUsuario" 
+              type="text" 
+              formControlName="nomeUsuario" 
+              placeholder="usuario123"
+              class="w-full px-4 py-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] placeholder-[var(--text-soft)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)] focus:border-transparent transition"
+            />
+            <div *ngIf="form.get('nomeUsuario')?.touched && form.get('nomeUsuario')?.invalid" class="text-sm text-red-500 mt-1">
+              <span *ngIf="form.get('nomeUsuario')?.hasError('required')">Nome de usuário é obrigatório</span>
+              <span *ngIf="form.get('nomeUsuario')?.hasError('minlength')">Mínimo 3 caracteres</span>
+              <span *ngIf="form.get('nomeUsuario')?.hasError('pattern')">Apenas letras, números e _</span>
+            </div>
+          </div>
+
+          <!-- Telefone -->
+          <div>
+            <label for="telefone" class="block text-sm font-medium text-[var(--text)] mb-2">Telefone (opcional)</label>
+            <app-phone-input formControlName="telefone" class="w-full"></app-phone-input>
+          </div>
+
+          <!-- Data de Nascimento -->
+          <div>
+            <label for="dataNascimento" class="block text-sm font-medium text-[var(--text)] mb-2">Data de Nascimento</label>
+            <input 
+              id="dataNascimento" 
+              type="date" 
+              formControlName="dataNascimento"
+              class="w-full px-4 py-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)] focus:border-transparent transition"
+            />
+            <div *ngIf="form.get('dataNascimento')?.touched && form.get('dataNascimento')?.invalid" class="text-sm text-red-500 mt-1">
+              <span *ngIf="form.get('dataNascimento')?.hasError('required')">Data de nascimento é obrigatória</span>
+            </div>
+          </div>
+
+          <!-- Senha -->
+          <div>
+            <label for="senha" class="block text-sm font-medium text-[var(--text)] mb-2">Senha</label>
+            <input 
+              id="senha" 
+              type="password" 
+              formControlName="senha" 
+              autocomplete="new-password" 
+              placeholder="Senha forte com 8+ caracteres"
+              class="w-full px-4 py-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] placeholder-[var(--text-soft)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)] focus:border-transparent transition"
+            />
+            <div *ngIf="form.get('senha')?.touched && form.get('senha')?.invalid" class="text-sm text-red-500 mt-1">
+              <span *ngIf="form.get('senha')?.hasError('required')">Senha é obrigatória</span>
+              <span *ngIf="form.get('senha')?.hasError('minLength')">Mínimo 8 caracteres</span>
+              <span *ngIf="form.get('senha')?.hasError('lowercase')">Deve conter letra minúscula</span>
+              <span *ngIf="form.get('senha')?.hasError('uppercase')">Deve conter letra maiúscula</span>
+              <span *ngIf="form.get('senha')?.hasError('number')">Deve conter número</span>
+              <span *ngIf="form.get('senha')?.hasError('specialChar')">Deve conter caractere especial</span>
+            </div>
+          </div>
+
+          <!-- Confirmar Senha -->
+          <div>
+            <label for="confirmarSenha" class="block text-sm font-medium text-[var(--text)] mb-2">Confirmar Senha</label>
+            <input 
+              id="confirmarSenha" 
+              type="password" 
+              formControlName="confirmarSenha" 
+              autocomplete="new-password" 
+              placeholder="Digite a senha novamente"
+              class="w-full px-4 py-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] placeholder-[var(--text-soft)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)] focus:border-transparent transition"
+            />
+            <div *ngIf="form.get('confirmarSenha')?.touched && form.get('confirmarSenha')?.invalid" class="text-sm text-red-500 mt-1">
+              <span *ngIf="form.get('confirmarSenha')?.hasError('required')">Confirmação é obrigatória</span>
+            </div>
+            <div *ngIf="form.touched && form.hasError('passwordMismatch')" class="text-sm text-red-500 mt-1">
+              As senhas não coincidem
+            </div>
+          </div>
+
+          <!-- Error Message -->
+          <div *ngIf="error()" class="p-4 bg-red-50 border border-red-200 rounded-xl">
+            <p class="text-sm text-red-600">{{ error() }}</p>
+          </div>
+
+          <!-- Submit Button -->
+          <button 
+            type="submit" 
+            [disabled]="form.invalid || loading()" 
+            class="w-full btn h-12 text-base font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <span *ngIf="!loading()">Criar Conta</span>
+            <span *ngIf="loading()" class="flex items-center gap-2">
+              <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              Criando conta...
+            </span>
+          </button>
+
+          <!-- Login Link -->
+          <div class="text-center pt-4">
+            <p class="text-sm text-[var(--text-soft)]">
+              Já tem uma conta? 
+              <a routerLink="/login" class="font-semibold text-[var(--brand)] hover:text-[var(--brand-hover)] transition">
+                Faça login
+              </a>
+            </p>
+          </div>
+        </form>
+      </div>
+    }
+  </div>
+</div>

@@ -1,0 +1,377 @@
+<div class="h-full bg-[var(--bg)] text-[var(--text)]">
+  <div class="board-container">
+
+    <!-- Formulário de nova coluna -->
+    <div *ngIf="showNewColumnForm()" class="absolute top-4 left-4 right-4 z-10 p-4 bg-[var(--surface)] rounded-xl border border-[var(--border)] shadow-sm">
+      <form (ngSubmit)="addColumn()" class="flex items-center gap-3">
+        <input type="text" 
+               [ngModel]="newColumnTitle()" 
+               (ngModelChange)="newColumnTitle.set($event)" 
+               name="columnTitle" 
+               placeholder="Nome da nova coluna" 
+               class="input flex-1" />
+        <button type="submit" class="btn">Adicionar</button>
+        <button type="button" 
+                (click)="showNewColumnForm.set(false); newColumnTitle.set('')" 
+                class="btn-ghost p-2 !w-10 !h-10">
+          ✕
+        </button>
+      </form>
+    </div>
+
+    <!-- Estado vazio -->
+    <div *ngIf="currentBoardId() && columns().length===0" class="absolute inset-0 flex items-center justify-center">
+      <div class="text-center max-w-md">
+        <div class="w-20 h-20 mx-auto mb-4 bg-[var(--bg-soft)] rounded-full flex items-center justify-center text-4xl">
+          📋
+        </div>
+        <h3 class="text-xl font-semibold text-[var(--text)] mb-2">Board vazio</h3>
+        <p class="text-[var(--text-soft)] mb-6">Comece criando sua primeira coluna para organizar suas tarefas.</p>
+        <button type="button" 
+                (click)="showNewColumnForm.set(true); newColumnTitle.set('A Fazer')" 
+                class="btn">
+          Criar primeira coluna
+        </button>
+        <!-- Debug temporário -->
+        <div class="mt-4 p-2 bg-yellow-100 text-black text-xs">
+          <p>DEBUG: BoardID = {{ currentBoardId() }}</p>
+          <p>DEBUG: Colunas = {{ columns().length }}</p>
+          <p>DEBUG: Tarefas = {{ tasks().length }}</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Área das colunas -->
+    <div *ngIf="columns().length > 0" class="columns-wrapper" [attr.data-columns]="columns().length">
+      
+      <div *ngFor="let col of columns()" 
+           [attr.data-column-id]="col.id" 
+           [attr.data-task-count]="tasksByColumn()[col.id]?.length || 0"
+           class="column drop-zone"
+           [class.drag-over]="dropZoneColumn() === col.id">
+        
+        <!-- Cabeçalho da coluna -->
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-3 flex-1">
+            <span *ngIf="editingColumnId()!==col.id" 
+                    (dblclick)="startEditColumn(col)" 
+                    tabindex="0" 
+                    (keydown.enter)="startEditColumn(col)" 
+                    class="font-semibold text-[var(--text)] cursor-pointer hover:text-[var(--brand)] transition">
+                {{ col.titulo }}
+              </span>
+              <input *ngIf="editingColumnId()===col.id" 
+                     type="text" 
+                     [value]="tempEditText()" 
+                     (keydown.enter)="commitEditColumn(col)" 
+                     (blur)="commitEditColumn(col)" 
+                     (keydown.escape)="cancelEditColumn()" 
+                     (input)="onEditInput($event)" 
+                     class="input flex-1" />
+              
+              <span class="px-2 py-1 bg-[var(--bg-soft)] text-[var(--text-soft)] rounded-full text-xs font-medium">
+                {{ (tasksByColumn()[col.id] || []).length }}
+              </span>
+            </div>
+            
+            <div class="flex items-center gap-2">
+              <button type="button" 
+                      (click)="quickAddInColumn(col)" 
+                      class="btn-ghost !w-8 !h-8 text-[var(--brand)]" 
+                      title="Adicionar tarefa">
+                ＋
+              </button>
+              <button type="button" 
+                      (click)="deleteColumn(col)" 
+                      class="btn-ghost !w-8 !h-8 text-red-500 hover:text-red-600" 
+                      title="Excluir coluna">
+                ✕
+              </button>
+            </div>
+          </div>
+          
+          <!-- Lista de tarefas -->
+          <div class="column-content">
+            <div *ngFor="let t of tasksByColumn()[col.id]" 
+                 class="task-card-container group"
+                 [class.opacity-50]="isDragging() && draggedTask()?.id === t.id"
+                 [attr.data-task-id]="t.id">
+              
+              <!-- Card da task -->
+              <div *ngIf="editingTaskId()!==t.id" 
+                   class="task-card bg-[var(--surface)] rounded-xl shadow-sm border border-[var(--border)] hover:shadow-md transition-all duration-200"
+                   [style.border-left-color]="getPriorityBorderColor(t.prioridade)"
+                   [style.border-left-width]="'4px'"
+                   (click)="onTaskClick(t, $event)"
+                   (mousedown)="onTaskMouseDown($event, t)"
+                   (dblclick)="startEditTask(t)">
+                
+                <div class="p-4">
+                  <div class="flex items-start justify-between gap-3 mb-3">
+                    <!-- Drag handle -->
+                    <div class="drag-handle w-5 h-5 cursor-grab hover:cursor-grabbing flex-shrink-0 flex items-center justify-center text-[var(--text-soft)] hover:text-[var(--text)] transition opacity-0 group-hover:opacity-100"
+                         title="Arraste para mover">
+                      ⋮⋮
+                    </div>
+                    
+                    <!-- Título da task -->
+                    <div class="flex-1 min-w-0">
+                      <h4 class="font-medium text-[var(--text)] line-clamp-2 mb-1"
+                          [class.opacity-60]="t.status==='CONCLUIDA'">
+                        {{ t.titulo }}
+                      </h4>
+                      <p class="text-xs text-[var(--text-soft)] uppercase tracking-wide font-medium">
+                        {{ col.titulo }}
+                      </p>
+                    </div>
+                    
+                    <!-- Botão de notas com novo ícone -->
+                    <button (click)="toggleNotesPanel(t, $event)" 
+                            (mousedown)="stopPropagation($event)"
+                            (mouseup)="stopPropagation($event)"
+                            (touchstart)="stopPropagation($event)"
+                            class="notes-button w-8 h-8 rounded-lg bg-[var(--brand)] hover:bg-[var(--brand-hover)] text-white flex items-center justify-center text-sm transition-all shadow-sm hover:shadow-md opacity-0 group-hover:opacity-100"
+                            title="Notas"
+                            type="button">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                      </svg>
+                    </button>
+                  </div>
+                  
+                  <!-- Tags -->
+                  <div *ngIf="t.tags && t.tags.length" class="flex flex-wrap gap-1 mb-3">
+                    <span *ngFor="let tag of t.tags" 
+                          class="px-2 py-1 rounded-full bg-[var(--bg-soft)] text-[var(--text-soft)] text-xs font-medium">
+                      {{ tag }}
+                    </span>
+                  </div>
+                  
+                  <!-- Indicadores na parte inferior -->
+                  <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                      <!-- Indicador de prazo -->
+                      <div *ngIf="getDeadlineStatus(t)" 
+                           class="w-3 h-3 rounded-full"
+                           [style.background-color]="getDeadlineColor(getDeadlineStatus(t))"
+                           [title]="t.dueDate ? ('Prazo: ' + (t.dueDate | date:'dd/MM/yyyy HH:mm')) : ''">
+                      </div>
+                    </div>
+                    
+                    <!-- Status ou outras informações -->
+                    <span *ngIf="t.status==='CONCLUIDA'" 
+                          class="text-xs text-green-600 font-medium">
+                      ✓ Concluída
+                    </span>
+                  </div>
+                </div>
+              </div>
+              
+              <!-- Campo de edição -->
+              <div *ngIf="editingTaskId()===t.id" class="bg-white rounded-xl border border-[var(--border)] p-4">
+                <input type="text" 
+                       [value]="tempEditText()" 
+                       (keydown.enter)="commitEditTask(t)" 
+                       (blur)="commitEditTask(t)" 
+                       (keydown.escape)="cancelEditTask()" 
+                       (input)="onEditInput($event)" 
+                       class="input w-full" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<!-- Notepad flutuante -->
+<app-task-notepad 
+  *ngIf="activeNotepad()"
+  [task]="activeNotepad()!.task"
+  [position]="activeNotepad()!.position"
+  (onClose)="onNotepadClose()">
+</app-task-notepad>
+  <div class="bg-gradient-to-r from-[var(--brand)] to-[var(--brand-hover)] text-white p-6 shadow-lg">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center text-2xl">
+          💬
+        </div>
+        <div>
+          <h3 class="font-bold text-lg">Notas da Tarefa</h3>
+          <div class="flex items-center gap-2 mt-1">
+            <p class="text-white/90 text-sm" *ngIf="selectedTaskForNotes()">{{ selectedTaskForNotes()?.titulo }}</p>
+            <div class="flex items-center gap-1 text-xs text-white/80">
+              <div class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+              <span>Tempo real</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <button (click)="closeNotesPanel()" 
+              class="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors">
+        ✕
+      </button>
+    </div>
+  </div>
+
+  <!-- Área de notas existentes -->
+  <div class="flex-1 p-6 overflow-y-auto bg-[var(--bg)]" *ngIf="currentTaskNotes().length > 0; else emptyNotes">
+    <div class="space-y-4">
+      <div *ngFor="let nota of currentTaskNotes(); trackBy: trackByNota" 
+           class="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
+        <div class="flex justify-between items-start mb-3">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-[var(--brand)] to-[var(--brand-hover)] text-white text-sm flex items-center justify-center font-bold shadow-sm">
+              {{ getInitials(nota.autor?.nome || 'Anônimo') }}
+            </div>
+            <div class="flex flex-col">
+              <span class="font-semibold text-[var(--text)]">{{ nota.autor?.nome || 'Anônimo' }}</span>
+              <div class="flex items-center gap-2 mt-1">
+                <!-- Indicador de visibilidade -->
+                <span class="flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium"
+                      [class]="nota.publica ? 'bg-green-100 text-green-700' : (!nota.destinatario ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700')">
+                  <span *ngIf="nota.publica">🌐 Pública</span>
+                  <span *ngIf="!nota.publica && !nota.destinatario">🔒 Privada</span>
+                  <span *ngIf="!nota.publica && nota.destinatario">👤 Para {{ nota.destinatario.nome }}</span>
+                </span>
+                <span class="text-xs text-[var(--text-soft)]">{{ formatDateTime(nota.dataCriacao || '') }}</span>
+              </div>
+            </div>
+          </div>
+          <button *ngIf="canDeleteNote(nota) && nota.id" 
+                  (click)="deleteNote(nota.id!)" 
+                  class="w-8 h-8 rounded-lg hover:bg-red-50 text-red-500 hover:text-red-600 flex items-center justify-center transition-colors"
+                  title="Excluir nota">
+            🗑️
+          </button>
+        </div>
+        <p class="text-[var(--text)] whitespace-pre-wrap leading-relaxed">{{ nota.conteudo }}</p>
+      </div>
+    </div>
+  </div>
+
+  <ng-template #emptyNotes>
+    <div class="flex-1 flex items-center justify-center p-8 bg-[var(--bg)]">
+      <div class="text-center">
+        <div class="w-20 h-20 mx-auto mb-4 bg-[var(--bg-soft)] rounded-full flex items-center justify-center text-4xl">
+          📝
+        </div>
+        <h4 class="text-lg font-semibold text-[var(--text)] mb-2">Nenhuma nota ainda</h4>
+        <p class="text-[var(--text-soft)]">Adicione a primeira nota abaixo para começar</p>
+      </div>
+    </div>
+  </ng-template>
+
+  <!-- Área para adicionar nova nota -->
+  <div class="border-t border-[var(--border)] p-6 bg-[var(--surface)]">
+    <div class="space-y-4">
+      <div>
+        <label class="block text-sm font-semibold text-[var(--text)] mb-2">Nova nota</label>
+        <textarea [(ngModel)]="newNoteContent" 
+                  placeholder="Escreva sua nota aqui..."
+                  class="w-full p-4 border border-[var(--border)] rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-[var(--brand)] focus:border-transparent bg-[var(--bg)] text-[var(--text)] placeholder-[var(--text-soft)] transition"
+                  rows="3"></textarea>
+      </div>
+      
+      <!-- Configurações de visibilidade -->
+      <div class="space-y-3">
+        <div class="text-sm font-semibold text-[var(--text)]">Visibilidade:</div>
+        
+        <div class="space-y-2">
+          <!-- Opção: Pública -->
+          <label class="flex items-center gap-3 p-3 rounded-xl border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-soft)] transition"
+                 [class.bg-[var(--bg-soft)]]="noteVisibilityMode === 'public'"
+                 [class.border-[var(--brand)]]="noteVisibilityMode === 'public'">>
+            <input type="radio" 
+                   [(ngModel)]="noteVisibilityMode" 
+                   value="public" 
+                   name="visibility" 
+                   class="text-[var(--brand)]">
+            <div class="flex items-center gap-2">
+              <span class="text-lg">🌐</span>
+              <div>
+                <div class="font-medium text-[var(--text)]">Pública</div>
+                <div class="text-xs text-[var(--text-soft)]">Todos os membros podem ver</div>
+              </div>
+            </div>
+          </label>
+          
+          <!-- Opção: Privada -->
+          <label class="flex items-center gap-3 p-3 rounded-xl border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-soft)] transition"
+                 [class.bg-[var(--bg-soft)]]="noteVisibilityMode === 'private'"
+                 [class.border-[var(--brand)]]="noteVisibilityMode === 'private'">>
+            <input type="radio" 
+                   [(ngModel)]="noteVisibilityMode" 
+                   value="private" 
+                   name="visibility" 
+                   class="text-[var(--brand)]">
+            <div class="flex items-center gap-2">
+              <span class="text-lg">🔒</span>
+              <div>
+                <div class="font-medium text-[var(--text)]">Privada</div>
+                <div class="text-xs text-[var(--text-soft)]">Apenas para você</div>
+              </div>
+            </div>
+          </label>
+          
+          <!-- Opção: Para membros específicos -->
+          <label class="flex items-center gap-3 p-3 rounded-xl border border-[var(--border)] cursor-pointer hover:bg-[var(--bg-soft)] transition"
+                 [class.bg-[var(--bg-soft)]]="noteVisibilityMode === 'specific'"
+                 [class.border-[var(--brand)]]="noteVisibilityMode === 'specific'">>
+            <input type="radio" 
+                   [(ngModel)]="noteVisibilityMode" 
+                   value="specific" 
+                   name="visibility" 
+                   class="text-[var(--brand)]">
+            <div class="flex items-center gap-2">
+              <span class="text-lg">👥</span>
+              <div>
+                <div class="font-medium text-[var(--text)]">Para membros específicos</div>
+                <div class="text-xs text-[var(--text-soft)]">Selecione quem pode ver</div>
+              </div>
+            </div>
+          </label>
+        </div>
+        
+        <!-- Seletor de membros -->
+        <div *ngIf="noteVisibilityMode === 'specific'" class="bg-[var(--bg-soft)] rounded-xl p-4 border border-[var(--border)]">
+          <div class="text-sm font-semibold text-[var(--text)] mb-3">Selecione os membros:</div>
+          <div class="max-h-32 overflow-y-auto space-y-2">
+            <label *ngFor="let member of boardMembers()" 
+                   class="flex items-center gap-3 p-2 rounded-lg cursor-pointer hover:bg-[var(--surface)] transition">
+              <input type="checkbox" 
+                     [checked]="selectedMembers.includes(member.id)"
+                     (change)="toggleMemberSelection(member.id, $event)"
+                     class="text-[var(--brand)]">
+              <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-[var(--brand)] to-[var(--brand-hover)] text-white text-xs flex items-center justify-center font-bold">
+                {{ getInitials(member.nome) }}
+              </div>
+              <span class="text-[var(--text)] font-medium">{{ member.nome }}</span>
+            </label>
+          </div>
+        </div>
+      </div>
+      
+      <div class="flex items-center justify-between pt-4 border-t border-[var(--border)]">
+        <div class="text-sm text-[var(--text-soft)]">
+          <span *ngIf="noteVisibilityMode === 'public'">Visível para todos os membros</span>
+          <span *ngIf="noteVisibilityMode === 'private'">Apenas você verá esta nota</span>
+          <span *ngIf="noteVisibilityMode === 'specific' && selectedMembers.length === 0">Selecione pelo menos um membro</span>
+          <span *ngIf="noteVisibilityMode === 'specific' && selectedMembers.length === 1">Visível para 1 membro</span>
+          <span *ngIf="noteVisibilityMode === 'specific' && selectedMembers.length > 1">Visível para {{ selectedMembers.length }} membros</span>
+        </div>
+        <button (click)="addNote()" 
+                [disabled]="!newNoteContent.trim() || (noteVisibilityMode === 'specific' && selectedMembers.length === 0)"
+                class="btn disabled:opacity-50 disabled:cursor-not-allowed">
+          Adicionar Nota
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Overlay -->
+<div *ngIf="notesPanelOpen()" 
+     class="fixed inset-0 bg-black/20 backdrop-blur-sm z-40"
+     (click)="closeNotesPanel()"></div>
