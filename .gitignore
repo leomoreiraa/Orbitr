@@ -1,0 +1,25 @@
+# Java / Maven
+/target/
+**/target/
+.mvn/
+/.idea/
+*.iml
+
+# Node / Angular
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.angular/
+/frontend/.sass-cache/
+
+# Environment files
+.env
+**/.env
+
+# OS and editor
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Package lock
+/frontend/package-lock.json
