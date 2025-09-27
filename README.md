@@ -33,9 +33,3 @@ Orbitr é uma aplicação web de Kanban para gestão visual de tarefas e colabor
 - Pull requests e issues são bem-vindos. Para alterações significativas, abra uma issue descrevendo a proposta antes de implementar.
 - Se precisar de suporte rápido ou integração (CI/CD, publicação), descreva o objetivo e eu posso ajudar a preparar os artefatos necessários.
 
-**Licença**
-- O repositório não contém uma licença explícita por padrão. Se pretende torná-lo público, escolha e adicione uma licença apropriada (por exemplo MIT, Apache-2.0) conforme a política do projeto.
-
----
-
-Se quiser, eu adapto esse texto ao tom que preferir (mais técnico, mais comercial ou mais resumido) ou crio uma seção específica de arquitetura técnica com diagramas e endpoints principais.
